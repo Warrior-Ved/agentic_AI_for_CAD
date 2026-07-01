@@ -1,0 +1,24 @@
+# Runtime dependencies, grouped by roadmap phase. Install incrementally — you do
+# NOT need the whole list to work on the current phase. FreeCAD itself is NOT a
+# pip package; it is the system install imported via agentic_cad.cad.bootstrap.
+#
+# All deps target the Python 3.11 venv in backend/.venv.
+
+# --- Phase 2: MCP CAD core (agent <-> tool servers) ---
+mcp>=1.2.0                 # Model Context Protocol Python SDK
+pydantic>=2.7             # schema-constrained tool args / structured output
+
+# --- Phase 2-3: local model serving ---
+ollama>=0.3.0             # client for the local Ollama server (router/planner)
+httpx>=0.27              # async HTTP (Ollama transport / health checks)
+
+# --- Phase 3-4: numerics / ingestion ---
+numpy>=1.26              # geometry math, FEA result post-processing
+
+# --- Phase 5: reflective memory ---
+chromadb>=0.5.0          # local vector store for lesson cards
+# (SQLite is stdlib; used for the episodic log)
+
+# --- Phase 4 / 7: UI (FreeCAD already bundles PySide6; only needed for a
+#     standalone dock app outside FreeCAD) ---
+# PySide6>=6.7

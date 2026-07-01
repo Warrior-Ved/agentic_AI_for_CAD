@@ -216,3 +216,30 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---- Virtual envs ----
+backend/.venv/
+freecad_libs/
+
+# ---- Runtime data (kept local, per privacy design) ----
+backend/var/
+*.FCStd1
+*.log
+data/runtime/
+chroma/
+*.sqlite
+*.sqlite3
+
+# ---- Generated CAD artifacts ----
+*.step
+*.stp
+*.stl
+*.iges
+*.igs
+!tests/**/fixtures/**
+
+# ---- Editor / OS ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
