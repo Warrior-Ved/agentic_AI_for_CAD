@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agentic CAD — parametric modelling by conversation</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- ============================ LEFT: conversation ==================== -->
+    <section class="panel left">
+      <header class="topbar">
+        <div class="brand">
+          <span class="logo">◧</span>
+          <div>
+            <h1>Agentic CAD</h1>
+            <p class="tagline">Describe a part — approve the plan — build it in FreeCAD</p>
+          </div>
+        </div>
+        <div id="health" class="health">
+          <span class="pill" data-k="freecad">FreeCAD…</span>
+          <span class="pill" data-k="ollama">Ollama…</span>
+          <span class="pill" data-k="model">model…</span>
+        </div>
+      </header>
+
+      <div id="log" class="log">
+        <div class="msg agent intro">
+          <p><strong>Hi!</strong> Tell me what to build — e.g.
+            <em>“make a cube of 30&nbsp;mm with a 10&nbsp;mm hole”</em>.
+            I’ll ask about anything ambiguous (where the hole sits, through or blind,
+            depth, axis), show you a plan and a preview, and only build it once you approve.</p>
+        </div>
+      </div>
+
+      <form id="composer" class="composer" autocomplete="off">
+        <textarea id="instruction" rows="2"
+          placeholder="Describe the part…  (Enter to send, Shift+Enter for newline)"></textarea>
+        <div class="composer-row">
+          <button type="button" id="resetBtn" class="ghost" title="Start a new part">Reset</button>
+          <button type="submit" id="sendBtn" class="primary">Design&nbsp;part →</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- ============================ RIGHT: 3-D viewer ===================== -->
+    <section class="panel right">
+      <div id="viewer" class="viewer">
+        <div id="viewerHint" class="viewer-hint">The 3-D model will appear here.</div>
+        <div id="spinner" class="spinner hidden"><div></div><span id="spinnerText">Working…</span></div>
+      </div>
+      <div class="viewer-info">
+        <div id="stats" class="stats"></div>
+        <div class="downloads">
+          <a id="dlStep" class="ghost small disabled" href="/api/model.step">STEP</a>
+          <a id="dlStl" class="ghost small disabled" href="/api/model.stl" download="model.stl">STL</a>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="/vendor/three.min.js"></script>
+  <script src="/vendor/STLLoader.js"></script>
+  <script src="/vendor/OrbitControls.js"></script>
+  <script src="/viewer.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

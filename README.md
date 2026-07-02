@@ -100,10 +100,30 @@ cd backend
 .venv/Scripts/python.exe scripts/demo_agent.py
 .venv/Scripts/python.exe scripts/demo_agent.py "make a 30mm cube with an 8mm hole"
 
-# Phase 3 — Plan -> Confirm -> Execute (schema-constrained plan, preview, approve, validated execute)
+# Phase 3 — Clarify -> Plan -> Confirm -> Execute (asks about ambiguous geometry, then schema-constrained plan, preview, approve, validated execute)
 .venv/Scripts/python.exe scripts/demo_plan_confirm.py
 .venv/Scripts/python.exe scripts/demo_plan_confirm.py --interactive "a 50mm cube with a 12mm hole"
+.venv/Scripts/python.exe scripts/demo_plan_confirm.py --no-clarify "a 50mm cube with a 12mm hole"
 ```
+
+## Run the web app (browser frontend)
+
+```bash
+cd backend
+.venv/Scripts/python.exe -m pip install -r requirements.txt   # adds fastapi + uvicorn
+.venv/Scripts/python.exe scripts/serve.py                     # http://127.0.0.1:8000
+```
+
+Open <http://127.0.0.1:8000>. Type a part in plain language (e.g. *"make a cube of
+30 mm with a 10 mm hole"*). The agent first asks any **geometry-critical
+clarifying questions** — where the hole sits, through vs blind, depth, axis —
+each with a suggested default. It then shows the **plan** and a **preview**
+(built in a throwaway document, live model untouched), which you **approve** or
+**reject with feedback**. Only on approval is it committed to the live model as a
+single undo step, and the result renders in an interactive **3-D viewer** (STEP /
+STL downloadable). The 3-D library is vendored under `frontend/vendor/`, so the
+whole app runs offline. Requires Ollama running locally; the header shows live
+FreeCAD / Ollama / model status.
 
 `demo_holed_block.py` builds the Deliverable-1 holed block parametrically and
 writes `.FCStd` + `.step` + `.stl` into `backend/var/`. `demo_agent.py` runs the
@@ -144,12 +164,17 @@ backend/
       loop.py            #   ReAct loop (Ollama tool-calling + text fallback)
       plan.py            #   Plan/PlanStep schema + validate-against-registry
       planner.py         #   constrained-JSON plan + LLM repair generation
+      clarify.py         #   ask geometry-critical questions before planning
       validation.py      #   per-step kernel validation (State + shape checks)
-      execute.py         #   Plan -> Confirm -> Execute engine (preview/transaction/repair)
+      execute.py         #   Clarify -> Plan -> Confirm -> Execute engine (preview/transaction/repair)
+    server/
+      app.py             #   FastAPI: clarify/plan/execute/model endpoints (in-process FreeCAD)
+      session.py         #   live-document session state + preview/geometry helpers
   tests/cad/             # Phase 1 suite (analytically verified)
-  tests/agent/           # Phase 2 + 3 suite (tools, loop, MCP, plan-confirm-execute)
-  scripts/               # runnable demos
+  tests/agent/           # Phase 2 + 3 suite (tools, loop, MCP, plan-confirm-execute, clarify)
+  scripts/               # runnable demos + serve.py (web app launcher)
   var/                   # local runtime artifacts (gitignored)
+frontend/                # browser test UI (vanilla JS + vendored three.js 3-D viewer)
 docs/                    # proposal, supervisor deck, literature review
 ```
 
