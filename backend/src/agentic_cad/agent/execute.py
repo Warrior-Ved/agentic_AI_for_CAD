@@ -1,6 +1,8 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
+from agentic_cad.agent.clarify import (
+    Clarification, ClarifyChatFn, answers_to_context, make_clarification)
 from agentic_cad.agent.plan import Plan, PlanStep
 from agentic_cad.agent.planner import make_plan
 from agentic_cad.agent.validation import validate_document
@@ -13,6 +15,8 @@ import FreeCAD as App  # noqa: E402
 RepairFn = Callable[[PlanStep, str, dict, ToolRegistry], dict | None]
 # confirm_fn(plan, preview) -> Decision.
 ConfirmFn = Callable[["Plan", "ExecutionResult"], "Decision"]
+# clarify_fn(clarification) -> {question_id: answer}. Returning {} accepts the defaults.
+ClarifyFn = Callable[["Clarification"], dict]
 
 _DOC_MGMT_TOOLS = {"new_document", "save_document"}
 
@@ -157,18 +161,29 @@ def execute_plan(plan: Plan, registry: ToolRegistry, doc, *,
     return res
 
 
-# Main Loop: plan -> confirm -> execute (with replanning on reject)
+# Main Loop: clarify -> plan -> confirm -> execute (with replanning on reject)
 def plan_confirm_execute(instruction: str, registry: ToolRegistry, doc, *, confirm_fn: ConfirmFn,
                          planner_chat_fn=None, repair_fn: RepairFn | None = None, model: str | None = None,
-                         context: str | None = None, max_rounds: int = 3,
-                         max_repair: int = 2) -> ExecutionResult:
+                         context: str | None = None, max_rounds: int = 3, max_repair: int = 2,
+                         clarify_fn: ClarifyFn | None = None,
+                         clarify_chat_fn: ClarifyChatFn | None = None) -> ExecutionResult:
+    """Full human-in-the-loop build.
+
+    If ``clarify_fn`` and ``clarify_chat_fn`` are given, the loop first asks the
+    model which geometry-critical details are ambiguous; ``clarify_fn`` collects
+    the user's answers, which are folded into the planner's context as a resolved
+    spec. Then it plans, previews, confirms and executes as before.
+    """
+    spec = _resolve_spec(instruction, clarify_fn, clarify_chat_fn, model)
+    base_context = "\n\n".join(c for c in (spec, context) if c) or None
+
     feedback: str | None = None
     for _ in range(max_rounds):
         instr = instruction
         if feedback:
             instr = f"{instruction}\n\nUser rejected the previous plan: {feedback}"
 
-        plan_kwargs = {"chat_fn": planner_chat_fn, "context": context}
+        plan_kwargs = {"chat_fn": planner_chat_fn, "context": base_context}
         if model:
             plan_kwargs["model"] = model
         plan = make_plan(instr, registry, **plan_kwargs)
@@ -178,10 +193,25 @@ def plan_confirm_execute(instruction: str, registry: ToolRegistry, doc, *, confi
 
         if decision.action in ("approve", "edit"):
             chosen = decision.plan if decision.action == "edit" else plan
-            return execute_plan(chosen, registry, doc, repair_fn=repair_fn, max_repair=max_repair, 
+            return execute_plan(chosen, registry, doc, repair_fn=repair_fn, max_repair=max_repair,
                                 label=instruction[:60])
         if decision.action == "reject":
             feedback = decision.feedback
             continue
 
     return ExecutionResult(False, message="rejected: reached max planning rounds")
+
+
+def _resolve_spec(instruction, clarify_fn, clarify_chat_fn, model) -> str | None:
+    """Run the clarification sub-step, returning a resolved-spec context block
+    (or None if clarification is disabled or nothing was ambiguous)."""
+    if not (clarify_fn and clarify_chat_fn):
+        return None
+    kwargs = {"chat_fn": clarify_chat_fn}
+    if model:
+        kwargs["model"] = model
+    clar = make_clarification(instruction, **kwargs)
+    if not clar.needs_clarification:
+        return None
+    answers = clarify_fn(clar) or {}
+    return answers_to_context(clar, answers, instruction=instruction)

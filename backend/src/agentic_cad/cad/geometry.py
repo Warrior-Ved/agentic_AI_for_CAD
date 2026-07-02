@@ -25,7 +25,7 @@ def add_box(doc: "FCad.Document", length: float, width: float, height: float, na
             position: Sequence[float] = (0, 0, 0)) -> "FCad.DocumentObject":
     """Function to create and add a cuboidal object."""
     box = doc.addObject("Part::Box", name)
-    box.Length, box.width, box.height = length, width, height
+    box.Length, box.Width, box.Height = length, width, height
     box.Placement = placement(position)
     doc.recompute()
     return box

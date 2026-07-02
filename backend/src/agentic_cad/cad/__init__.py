@@ -12,4 +12,11 @@ Always do this at the top of a CAD module::
     bootstrap.ensure_freecad_importable()
     import FreeCAD as App
     import Part
+
+Importing this subpackage runs the bootstrap eagerly, so a fresh interpreter
+(e.g. the MCP server subprocess) can ``import FreeCAD`` at module top level
+before any function has been called.
 """
+from agentic_cad.cad import bootstrap
+
+bootstrap.ensure_freecad_importable()

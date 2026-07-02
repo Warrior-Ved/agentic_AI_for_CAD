@@ -1,14 +1,20 @@
-"""Live Phase 3 demo: Plan -> Confirm -> Execute with a local model.
+"""Live Phase 3 demo: Clarify -> Plan -> Confirm -> Execute with a local model.
 
     .venv/Scripts/python.exe scripts/demo_plan_confirm.py
     .venv/Scripts/python.exe scripts/demo_plan_confirm.py "a 50mm cube with a 12mm hole"
     .venv/Scripts/python.exe scripts/demo_plan_confirm.py --interactive "..."
+    .venv/Scripts/python.exe scripts/demo_plan_confirm.py --no-clarify "..."
 
-By default the confirm step auto-approves (so it runs unattended); pass
---interactive to review/approve/reject each plan yourself. The planner emits a
-schema-constrained JSON plan, it is previewed in a throwaway document, and only
-the approved plan is executed into the live model with per-step validation,
-bounded repair and single-undo.
+The agent first asks any GEOMETRY-CRITICAL clarifying questions (where the hole
+is, through vs blind, depth, axis) — at the terminal you answer them (blank
+accepts the suggested default). Those answers become a resolved spec that grounds
+the planner. The planner then emits a schema-constrained JSON plan, it is
+previewed in a throwaway document, and only the approved plan is executed into
+the live model with per-step validation, bounded repair and single-undo.
+
+By default the confirm step auto-approves so it runs unattended; pass
+--interactive to review/approve/reject each plan yourself. Pass --no-clarify to
+skip the clarification stage entirely.
 """
 from __future__ import annotations
 
@@ -18,6 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from agentic_cad import config
+from agentic_cad.agent.clarify import make_clarify_fn, prompt_answers_console
 from agentic_cad.agent.execute import approve, plan_confirm_execute, reject
 from agentic_cad.agent.planner import make_ollama_plan_fn, make_ollama_repair_fn
 from agentic_cad.cad import document
@@ -29,12 +36,14 @@ DEFAULT = "Create a 40x20x10 mm block with a 10 mm diameter hole through the cen
 def main() -> None:
     args = sys.argv[1:]
     interactive = "--interactive" in args
-    args = [a for a in args if a != "--interactive"]
+    clarify = "--no-clarify" not in args
+    args = [a for a in args if a not in ("--interactive", "--no-clarify")]
     instruction = args[0] if args else DEFAULT
     model = config.MODEL_PLANNER
 
     print(f"Model      : {model}")
-    print(f"Instruction: {instruction}\n")
+    print(f"Instruction: {instruction}")
+    print(f"Clarify    : {'on' if clarify else 'off'}\n")
 
     def confirm_fn(plan, preview):
         print("=" * 70)
@@ -60,6 +69,8 @@ def main() -> None:
         confirm_fn=confirm_fn,
         planner_chat_fn=make_ollama_plan_fn(model),
         repair_fn=make_ollama_repair_fn(model),
+        clarify_fn=prompt_answers_console if clarify else None,
+        clarify_chat_fn=make_clarify_fn(model) if clarify else None,
     )
 
     print("\n--- EXECUTION ---")

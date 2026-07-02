@@ -12,6 +12,10 @@ pydantic>=2.7             # schema-constrained tool args / structured output
 ollama>=0.3.0             # client for the local Ollama server (router/planner)
 httpx>=0.27              # async HTTP (Ollama transport / health checks)
 
+# --- Web test frontend (scripts/serve.py) ---
+fastapi>=0.110           # HTTP API exposing the clarify->plan->confirm->execute loop
+uvicorn>=0.29            # ASGI server (run single-worker; the FreeCAD kernel is stateful)
+
 # --- Phase 3-4: numerics / ingestion ---
 numpy>=1.26              # geometry math, FEA result post-processing
 

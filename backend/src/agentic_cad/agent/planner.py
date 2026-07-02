@@ -14,12 +14,27 @@ list of tool calls that build the requested part in FreeCAD, in millimetres.
 
 Requirements:
 - Use ONLY the tools listed below, with correct argument names.
-- Make every dimension explicit and numeric. Think about positions: to centre a \
-hole in a block of length L and width W, place the cutting cylinder at x=L/2, y=W/2.
-- To cut a hole: add the solid, add a cylinder for the hole, then boolean_cut with \
-the solid as base and the cylinder as tool.
+- Make every dimension explicit and numeric.
+- If a "Resolved specification" is provided, it is AUTHORITATIVE — honour every \
+line of it exactly (hole position, through vs blind, depth, axis). Do not \
+override it with your own assumptions.
 - Give each step a one-line rationale.
 - Output ONLY the JSON object, matching the required schema.
+
+Geometry rules for boxes and holes (a box spans x:0..L, y:0..W, z:0..H):
+- A box is created with its near-bottom corner at its (x, y, z), so it occupies \
+[x, x+length] x [y, y+width] x [z, z+height].
+- To CENTRE a hole on the top face of a box of length L and width W, place the \
+cutting cylinder at x=L/2, y=W/2 (NOT at a corner).
+- A cylinder is created with its base circle centred on its (x, y, z) and its \
+axis along +Z, extending upward by its height.
+- For a THROUGH hole along Z, make the cutting cylinder longer than the block and \
+start it below the block: set the cylinder z = -1 and its height = H + 2, so it \
+passes cleanly all the way through. Its radius is (hole diameter)/2.
+- For a BLIND hole of depth D from the top face, set the cylinder height = D + 1 \
+and z = H - D (so it starts at the surface and stops D deep).
+- To cut a hole: add the box, add the cutting cylinder, then boolean_cut with the \
+box as base and the cylinder as tool.
 
 Available tools:
 {catalog}
