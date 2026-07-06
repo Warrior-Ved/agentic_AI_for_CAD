@@ -61,6 +61,12 @@ then loft with their sketch names in order.
 - Helical/threaded shapes: add_helix for the path, a closed profile sketch, then sweep.
 - Features repeated around an axis (bolt circles, spokes): build one, then polar_array.
 
+Simulation (only when the user asks to analyse/test a part that already exists):
+- Call list_faces first to see face names, areas, centres and normals, then pick faces \
+by their geometry (e.g. the face with normal [0,0,1] is the top).
+- Strength/deflection: simulate_static(fixed_faces, load_faces, force_n, direction).
+- Heat flow: simulate_thermal(hot_faces, hot_temp_c, cold_faces, cold_temp_c).
+
 Available tools:
 {catalog}
 """
