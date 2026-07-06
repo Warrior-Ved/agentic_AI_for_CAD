@@ -31,12 +31,20 @@ def add_box(doc: "FCad.Document", length: float, width: float, height: float, na
     return box
 
 
+def _axis_placement(position: Sequence[float], axis: Sequence[float]) -> "FCad.Placement":
+    """Placement that puts the object's +Z axis along ``axis`` at ``position``."""
+    axis_vec = Vec(*axis)
+    if axis_vec.Length == 0:
+        raise ValueError("axis must be a non-zero vector")
+    return FCad.Placement(Vec(*position), FCad.Rotation(Vec(0, 0, 1), axis_vec))
+
+
 def add_cylinder(doc: "FCad.Document", radius: float, height: float, name: str = "Cylinder",
                  position: Sequence[float] = (0, 0, 0), axis: Sequence[float] = (0, 0, 1)) -> "FCad.DocumentObject":
-    """Function to create and add a cylindrical object."""
+    """Function to create and add a cylindrical object (axis tiltable, default +Z)."""
     cyl = doc.addObject("Part::Cylinder", name)
     cyl.Radius, cyl.Height = radius, height
-    cyl.Placement = placement(position, axis, 0.0)
+    cyl.Placement = _axis_placement(position, axis)
     doc.recompute()
     return cyl
 
@@ -51,7 +59,7 @@ def add_sphere(doc: "FCad.Document", radius: float, name: str = "Sphere",
     return sph
 
 
-def add_cone(doc: "FCad.Document", r1: float, r2: float, height: float, name: str = "Cone", 
+def add_cone(doc: "FCad.Document", r1: float, r2: float, height: float, name: str = "Cone",
              position: Sequence[float] = (0, 0, 0)) -> "FCad.DocumentObject":
     """Function to create and add a conical object."""
     cone = doc.addObject("Part::Cone", name)
@@ -61,6 +69,16 @@ def add_cone(doc: "FCad.Document", r1: float, r2: float, height: float, name: st
     cone.Placement = placement(position)
     doc.recompute()
     return cone
+
+
+def add_torus(doc: "FCad.Document", radius1: float, radius2: float, name: str = "Torus",
+              position: Sequence[float] = (0, 0, 0), axis: Sequence[float] = (0, 0, 1)) -> "FCad.DocumentObject":
+    """Torus: radius1 = ring (major) radius, radius2 = tube (minor) radius."""
+    tor = doc.addObject("Part::Torus", name)
+    tor.Radius1, tor.Radius2 = radius1, radius2
+    tor.Placement = _axis_placement(position, axis)
+    doc.recompute()
+    return tor
 
 
 # --------------------------------------------------------------------------- #
@@ -134,6 +152,15 @@ def set_property(obj, name: str, value, doc=None):
 def translate(obj, vector: Sequence[float], doc=None):
     """Move an object by a vector (relative to its current placement)."""
     obj.Placement = FCad.Placement(Vec(*vector), FCad.Rotation()).multiply(obj.Placement)
+    (doc or obj.Document).recompute()
+    return obj
+
+
+def rotate(obj, axis: Sequence[float] = (0, 0, 1), angle_deg: float = 90.0,
+           center: Sequence[float] = (0, 0, 0), doc=None):
+    """Rotate an object about an axis through ``center`` (relative, like translate)."""
+    spin = FCad.Placement(Vec(0, 0, 0), FCad.Rotation(Vec(*axis), angle_deg), Vec(*center))
+    obj.Placement = spin.multiply(obj.Placement)
     (doc or obj.Document).recompute()
     return obj
 

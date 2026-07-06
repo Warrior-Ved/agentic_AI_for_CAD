@@ -22,7 +22,10 @@ def ensure_freecad_importable() -> None:
 
     bin_dir = home / "bin"
     lib_dir = home / "lib"
-    for path in (str(bin_dir), str(lib_dir)):
+    # bin/Lib/site-packages holds FreeCAD's bundled pure-Python deps (numpy,
+    # needed by the FEM stack). Appended AFTER the venv paths so venv packages win.
+    site_dir = bin_dir / "Lib" / "site-packages"
+    for path in (str(bin_dir), str(lib_dir), str(site_dir)):
         if path not in sys.path:
             sys.path.append(path)
 

@@ -1,9 +1,10 @@
 from __future__ import annotations
+import math
 from typing import Sequence
 from agentic_cad.cad import bootstrap
-import FreeCAD as FCad  
-import Part  
-import Sketcher  
+import FreeCAD as FCad
+import Part
+import Sketcher
 
 bootstrap.ensure_freecad_importable()
 Vec = FCad.Vector
@@ -48,6 +49,33 @@ def sketch_circle(sketch, center: Sequence[float], radius: float) -> dict:
     con_id = sketch.addConstraint(Sketcher.Constraint("Radius", geo_id, radius))
     sketch.Document.recompute()
     return {"geo_id": geo_id, "radius_constraint": con_id}
+
+
+def sketch_polygon(sketch, sides: int, radius: float, center: Sequence[float] = (0, 0),
+                   rotation_deg: float = 0.0) -> list[int]:
+    """Add a closed regular polygon (circumradius ``radius``). Returns line geo ids."""
+    if sides < 3:
+        raise ValueError("a polygon needs at least 3 sides")
+    cx, cy = center
+    a0 = math.radians(rotation_deg)
+    pts = [(cx + radius * math.cos(a0 + 2 * math.pi * i / sides),
+            cy + radius * math.sin(a0 + 2 * math.pi * i / sides)) for i in range(sides)]
+    geo = [Part.LineSegment(Vec(*pts[i], 0), Vec(*pts[(i + 1) % sides], 0)) for i in range(sides)]
+    ids = sketch.addGeometry(geo, False)
+    for i in range(sides):
+        sketch.addConstraint(Sketcher.Constraint("Coincident", ids[i], 2, ids[(i + 1) % sides], 1))
+    sketch.Document.recompute()
+    return list(ids)
+
+
+def sketch_ellipse(sketch, center: Sequence[float], major_radius: float, minor_radius: float) -> int:
+    """Add an ellipse (major axis along the sketch X axis). Returns the geo id."""
+    if minor_radius > major_radius:
+        raise ValueError("major_radius must be >= minor_radius")
+    cx, cy = center
+    geo_id = sketch.addGeometry(Part.Ellipse(Vec(cx, cy, 0), major_radius, minor_radius), False)
+    sketch.Document.recompute()
+    return geo_id
 
 
 def set_datum(sketch, constraint_id: int, value: float, doc=None):

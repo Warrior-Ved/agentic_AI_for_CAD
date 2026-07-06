@@ -21,6 +21,16 @@ override it with your own assumptions.
 - Give each step a one-line rationale.
 - Output ONLY the JSON object, matching the required schema.
 
+Referring to objects across steps (this is the most common cause of failure):
+- A later step can only reference an object that an EARLIER step created.
+- Refer to it by the EXACT string you passed as that step's `name` argument — \
+same spelling, same capitalisation, and NO spaces (use "HoleTool", never \
+"Hole Tool" or "hole"). If a step has no `name`, do not invent one.
+- Always give a `name` to any object you will reference later (a sketch you will \
+extrude, a solid you will cut or fuse), and reuse that identical string.
+- Prefer the fewest steps: if one generator tool (gear, fan, spring) or one \
+primitive builds the part, do NOT decompose it into sketches and booleans.
+
 Geometry rules for boxes and holes (a box spans x:0..L, y:0..W, z:0..H):
 - A box is created with its near-bottom corner at its (x, y, z), so it occupies \
 [x, x+length] x [y, y+width] x [z, z+height].
@@ -35,6 +45,21 @@ passes cleanly all the way through. Its radius is (hole diameter)/2.
 and z = H - D (so it starts at the surface and stops D deep).
 - To cut a hole: add the box, add the cutting cylinder, then boolean_cut with the \
 box as base and the cylinder as tool.
+- A hole along the X or Y axis: tilt the cutting cylinder with axis_x/axis_y/axis_z \
+(e.g. axis_x=1, axis_z=0 goes along +X).
+
+Complex multi-surface parts — prefer ONE generator call over many primitive steps:
+- Gear: add_involute_gear(module_mm, teeth, thickness, ...). Pitch diameter = \
+module_mm * teeth; set helix_angle for a helical gear; bore_diameter for the shaft hole.
+- Fan / propeller / impeller: add_fan_rotor(hub_radius, hub_height, blade_count, \
+blade_length, chord, ...) builds the hub AND the twisted blades in one step — never \
+build blades from boxes.
+- Coil spring: add_spring(coil_radius, wire_radius, pitch, turns).
+- Body of revolution (vase, pulley, dome, bottle): sketch the half profile, then revolve.
+- Blended/tapered sections: 2+ sketches at different heights (use the sketch z offset), \
+then loft with their sketch names in order.
+- Helical/threaded shapes: add_helix for the path, a closed profile sketch, then sweep.
+- Features repeated around an axis (bolt circles, spokes): build one, then polar_array.
 
 Available tools:
 {catalog}
