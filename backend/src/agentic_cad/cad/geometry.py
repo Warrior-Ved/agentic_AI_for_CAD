@@ -21,11 +21,17 @@ def placement(position: Sequence[float] = (0, 0, 0), axis: Sequence[float] = (0,
 # --------------------------------------------------------------------------- #
 # Primitives
 # --------------------------------------------------------------------------- #
-def add_box(doc: "FCad.Document", length: float, width: float, height: float, name: str = "Box", 
-            position: Sequence[float] = (0, 0, 0)) -> "FCad.DocumentObject":
-    """Function to create and add a cuboidal object."""
+def add_box(doc: "FCad.Document", length: float, width: float, height: float, name: str = "Box",
+            position: Sequence[float] = (0, 0, 0), centered: bool = False) -> "FCad.DocumentObject":
+    """Function to create and add a cuboidal object.
+
+    ``position`` is the min corner by default; with ``centered`` it is the box
+    CENTRE (like cylinders), which is far easier to reason about for cutters.
+    """
     box = doc.addObject("Part::Box", name)
     box.Length, box.Width, box.Height = length, width, height
+    if centered:
+        position = (position[0] - length / 2, position[1] - width / 2, position[2] - height / 2)
     box.Placement = placement(position)
     doc.recompute()
     return box
@@ -40,10 +46,21 @@ def _axis_placement(position: Sequence[float], axis: Sequence[float]) -> "FCad.P
 
 
 def add_cylinder(doc: "FCad.Document", radius: float, height: float, name: str = "Cylinder",
-                 position: Sequence[float] = (0, 0, 0), axis: Sequence[float] = (0, 0, 1)) -> "FCad.DocumentObject":
-    """Function to create and add a cylindrical object (axis tiltable, default +Z)."""
+                 position: Sequence[float] = (0, 0, 0), axis: Sequence[float] = (0, 0, 1),
+                 centered: bool = False) -> "FCad.DocumentObject":
+    """Function to create and add a cylindrical object (axis tiltable, default +Z).
+
+    ``position`` is the base-circle centre by default; with ``centered`` it is
+    the cylinder's mid-height centre (shifted half the height back along the axis).
+    """
     cyl = doc.addObject("Part::Cylinder", name)
     cyl.Radius, cyl.Height = radius, height
+    if centered:
+        axis_vec = Vec(*axis)
+        if axis_vec.Length == 0:
+            raise ValueError("axis must be a non-zero vector")
+        axis_vec.normalize()
+        position = tuple(p - a * height / 2 for p, a in zip(position, axis_vec))
     cyl.Placement = _axis_placement(position, axis)
     doc.recompute()
     return cyl
