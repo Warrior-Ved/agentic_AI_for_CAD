@@ -19,9 +19,10 @@ uvicorn>=0.29            # ASGI server (run single-worker; the FreeCAD kernel is
 # --- Phase 3-4: numerics / ingestion ---
 numpy>=1.26              # geometry math, FEA result post-processing
 
-# --- Phase 5: reflective memory ---
-chromadb>=0.5.0          # local vector store for lesson cards
-# (SQLite is stdlib; used for the episodic log)
+# --- Phase 6: reflective memory ---
+# Lessons + episodes live in stdlib SQLite; embeddings come from Ollama
+# (all-minilm) and cosine search runs on numpy — no vector-DB dependency.
+# chromadb>=0.5.0        # (dropped: SQLite + numpy covers the need offline)
 
 # --- Phase 4 / 7: UI (FreeCAD already bundles PySide6; only needed for a
 #     standalone dock app outside FreeCAD) ---

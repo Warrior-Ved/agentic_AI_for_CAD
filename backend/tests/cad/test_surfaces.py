@@ -87,6 +87,23 @@ def test_cylinder_axis_orientation(doc):
     assert bb.ZLength == pytest.approx(6, rel=1e-6)
 
 
+def test_centered_box_placement(doc):
+    box = g.add_box(doc, 20, 10, 6, position=(0, 0, 0), centered=True)
+    bb = box.Shape.BoundBox
+    assert (bb.XMin, bb.XMax) == (pytest.approx(-10), pytest.approx(10))
+    assert (bb.ZMin, bb.ZMax) == (pytest.approx(-3), pytest.approx(3))
+
+
+def test_centered_cylinder_placement(doc):
+    cyl = g.add_cylinder(doc, 4, 30, position=(0, 0, 0), centered=True)
+    bb = cyl.Shape.BoundBox
+    assert (bb.ZMin, bb.ZMax) == (pytest.approx(-15), pytest.approx(15))
+    # centred along a tilted axis too
+    cyl2 = g.add_cylinder(doc, 4, 30, name="C2", axis=(1, 0, 0), centered=True)
+    bb2 = cyl2.Shape.BoundBox
+    assert (bb2.XMin, bb2.XMax) == (pytest.approx(-15), pytest.approx(15))
+
+
 def test_polygon_pad_volume(doc):
     sk = f.new_sketch(doc, "XY", name="Hex")
     f.sketch_polygon(sk, 6, 10)

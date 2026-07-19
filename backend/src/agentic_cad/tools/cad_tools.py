@@ -1,10 +1,18 @@
 from __future__ import annotations
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from agentic_cad.cad import document, features, ingest, inspect, parts, simulation, surfaces
 from agentic_cad.cad import geometry as g
 from agentic_cad.tools.registry import ToolRegistry
 
 registry = ToolRegistry()
+
+
+class ToolArgs(BaseModel):
+    """Base for every tool's argument model: unknown arguments are ERRORS
+    (extra="forbid"), so a planner that hallucinates a parameter is corrected
+    by schema feedback at PLAN time instead of being silently ignored."""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 # --------------------------------------------------------------------------- #
@@ -53,7 +61,7 @@ def _summary(obj) -> dict:
 # --------------------------------------------------------------------------- #
 # Document
 # --------------------------------------------------------------------------- #
-class NewDocumentArgs(BaseModel):
+class NewDocumentArgs(ToolArgs):
     name: str = Field("Model", description="Name for the new document")
 
 
@@ -64,7 +72,7 @@ def new_document(a: NewDocumentArgs) -> dict:
     return {"document": doc.Name}
 
 
-class SaveDocumentArgs(BaseModel):
+class SaveDocumentArgs(ToolArgs):
     filename: str | None = Field(None, description="Optional .FCStd path; defaults to local runtime dir")
 
 
@@ -77,7 +85,7 @@ def save_document(a: SaveDocumentArgs) -> dict:
 # --------------------------------------------------------------------------- #
 # Primitives
 # --------------------------------------------------------------------------- #
-class BoxArgs(BaseModel):
+class BoxArgs(ToolArgs):
     length: float = Field(..., gt=0, description="X size in mm")
     width: float = Field(..., gt=0, description="Y size in mm")
     height: float = Field(..., gt=0, description="Z size in mm")
@@ -85,15 +93,19 @@ class BoxArgs(BaseModel):
     x: float = 0.0
     y: float = 0.0
     z: float = 0.0
+    centered: bool = Field(False, description="True: (x,y,z) is the box CENTRE "
+                                              "(like a cylinder); False: its min corner")
 
 
-@registry.tool("add_box", "Create a rectangular box (cuboid) solid.", BoxArgs)
+@registry.tool("add_box",
+               "Create a rectangular box (cuboid) solid. Set centered=true to place it "
+               "by its centre — best for cutters and centred features.", BoxArgs)
 def add_box(a: BoxArgs) -> dict:
-    obj = g.add_box(_doc(), a.length, a.width, a.height, a.name, (a.x, a.y, a.z))
+    obj = g.add_box(_doc(), a.length, a.width, a.height, a.name, (a.x, a.y, a.z), a.centered)
     return _summary(obj)
 
 
-class CylinderArgs(BaseModel):
+class CylinderArgs(ToolArgs):
     radius: float = Field(..., gt=0, description="Radius in mm")
     height: float = Field(..., gt=0, description="Height in mm")
     name: str = Field("Cylinder", description="Name hint")
@@ -103,18 +115,21 @@ class CylinderArgs(BaseModel):
     axis_x: float = Field(0.0, description="Axis direction (default 0,0,1 = +Z)")
     axis_y: float = 0.0
     axis_z: float = 1.0
+    centered: bool = Field(False, description="True: (x,y,z) is the cylinder's MID-HEIGHT "
+                                              "centre; False: its base-circle centre")
 
 
 @registry.tool("add_cylinder",
-               "Create a cylinder solid (axis +Z by default; tilt it with axis_x/axis_y/axis_z, "
-               "e.g. axis_x=1, axis_z=0 for a side hole along X).", CylinderArgs)
+               "Create a cylinder solid (axis +Z by default; tilt with axis_x/axis_y/axis_z; "
+               "set centered=true to place it by its mid-height centre — best for cutters).",
+               CylinderArgs)
 def add_cylinder(a: CylinderArgs) -> dict:
     obj = g.add_cylinder(_doc(), a.radius, a.height, a.name, (a.x, a.y, a.z),
-                         (a.axis_x, a.axis_y, a.axis_z))
+                         (a.axis_x, a.axis_y, a.axis_z), a.centered)
     return _summary(obj)
 
 
-class SphereArgs(BaseModel):
+class SphereArgs(ToolArgs):
     radius: float = Field(..., gt=0)
     name: str = "Sphere"
     x: float = 0.0
@@ -128,7 +143,7 @@ def add_sphere(a: SphereArgs) -> dict:
     return _summary(obj)
 
 
-class ConeArgs(BaseModel):
+class ConeArgs(ToolArgs):
     radius1: float = Field(..., ge=0, description="Bottom radius mm")
     radius2: float = Field(..., ge=0, description="Top radius mm")
     height: float = Field(..., gt=0)
@@ -144,7 +159,7 @@ def add_cone(a: ConeArgs) -> dict:
     return _summary(obj)
 
 
-class TorusArgs(BaseModel):
+class TorusArgs(ToolArgs):
     radius1: float = Field(..., gt=0, description="Ring (major) radius mm")
     radius2: float = Field(..., gt=0, description="Tube (minor) radius mm")
     name: str = "Torus"
@@ -162,7 +177,7 @@ def add_torus(a: TorusArgs) -> dict:
 # --------------------------------------------------------------------------- #
 # Boolean operations
 # --------------------------------------------------------------------------- #
-class BooleanArgs(BaseModel):
+class BooleanArgs(ToolArgs):
     base: str = Field(..., description="Name of the base object")
     tool: str = Field(..., description="Name of the tool object")
     name: str = Field("Boolean", description="Name hint for the result")
@@ -186,7 +201,7 @@ def boolean_common(a: BooleanArgs) -> dict:
 # --------------------------------------------------------------------------- #
 # Dress-up
 # --------------------------------------------------------------------------- #
-class FilletArgs(BaseModel):
+class FilletArgs(ToolArgs):
     base: str = Field(..., description="Object whose edges to round")
     radius: float = Field(..., gt=0, description="Fillet radius mm")
     name: str = "Fillet"
@@ -197,7 +212,7 @@ def fillet_all_edges(a: FilletArgs) -> dict:
     return _summary(g.fillet_edges(_doc(), _obj(a.base), a.radius, None, a.name))
 
 
-class ChamferArgs(BaseModel):
+class ChamferArgs(ToolArgs):
     base: str = Field(..., description="Object whose edges to chamfer")
     size: float = Field(..., gt=0, description="Chamfer size mm")
     name: str = "Chamfer"
@@ -211,7 +226,7 @@ def chamfer_all_edges(a: ChamferArgs) -> dict:
 # --------------------------------------------------------------------------- #
 # Parametric edit + transform
 # --------------------------------------------------------------------------- #
-class SetPropertyArgs(BaseModel):
+class SetPropertyArgs(ToolArgs):
     name: str = Field(..., description="Object name")
     property: str = Field(..., description="Property to change, e.g. Length, Radius")
     value: float = Field(..., description="New numeric value (mm or deg)")
@@ -224,7 +239,7 @@ def set_property(a: SetPropertyArgs) -> dict:
     return _summary(g.set_property(_obj(a.name), a.property, a.value))
 
 
-class TranslateArgs(BaseModel):
+class TranslateArgs(ToolArgs):
     name: str = Field(..., description="Object name")
     dx: float = 0.0
     dy: float = 0.0
@@ -236,7 +251,7 @@ def translate(a: TranslateArgs) -> dict:
     return _summary(g.translate(_obj(a.name), (a.dx, a.dy, a.dz)))
 
 
-class RotateArgs(BaseModel):
+class RotateArgs(ToolArgs):
     name: str = Field(..., description="Object name")
     angle: float = Field(..., description="Rotation angle in degrees")
     axis_x: float = Field(0.0, description="Rotation axis direction (default 0,0,1 = +Z)")
@@ -257,7 +272,7 @@ def rotate(a: RotateArgs) -> dict:
 # --------------------------------------------------------------------------- #
 # Parametric sketch spine
 # --------------------------------------------------------------------------- #
-class NewSketchArgs(BaseModel):
+class NewSketchArgs(ToolArgs):
     plane: str = Field("XY", description="Datum plane: XY, XZ or YZ")
     x: float = 0.0
     y: float = 0.0
@@ -271,7 +286,7 @@ def new_sketch(a: NewSketchArgs) -> dict:
     return {"name": sk.Name, "plane": a.plane}
 
 
-class SketchRectArgs(BaseModel):
+class SketchRectArgs(ToolArgs):
     sketch: str = Field(..., description="Name of the sketch to draw in")
     width: float = Field(..., gt=0)
     height: float = Field(..., gt=0)
@@ -285,7 +300,7 @@ def sketch_rectangle(a: SketchRectArgs) -> dict:
     return {"sketch": a.sketch, "geometry_ids": ids}
 
 
-class SketchCircleArgs(BaseModel):
+class SketchCircleArgs(ToolArgs):
     sketch: str = Field(..., description="Name of the sketch to draw in")
     center_x: float = 0.0
     center_y: float = 0.0
@@ -300,7 +315,7 @@ def sketch_circle(a: SketchCircleArgs) -> dict:
     return {"sketch": a.sketch, **info}
 
 
-class SketchPolygonArgs(BaseModel):
+class SketchPolygonArgs(ToolArgs):
     sketch: str = Field(..., description="Name of the sketch to draw in")
     sides: int = Field(..., ge=3, le=64, description="Number of sides (6 = hexagon)")
     radius: float = Field(..., gt=0, description="Centre-to-vertex radius mm")
@@ -318,7 +333,7 @@ def sketch_polygon(a: SketchPolygonArgs) -> dict:
     return {"sketch": a.sketch, "geometry_ids": ids}
 
 
-class SketchEllipseArgs(BaseModel):
+class SketchEllipseArgs(ToolArgs):
     sketch: str = Field(..., description="Name of the sketch to draw in")
     major_radius: float = Field(..., gt=0, description="Half-length along X, mm")
     minor_radius: float = Field(..., gt=0, description="Half-width along Y, mm (<= major)")
@@ -334,7 +349,7 @@ def sketch_ellipse(a: SketchEllipseArgs) -> dict:
     return {"sketch": a.sketch, "geo_id": geo_id}
 
 
-class SetDatumArgs(BaseModel):
+class SetDatumArgs(ToolArgs):
     sketch: str = Field(..., description="Sketch name")
     constraint_id: int = Field(..., description="Constraint index (e.g. radius_constraint)")
     value: float = Field(..., description="New dimension value in mm")
@@ -347,7 +362,7 @@ def set_datum(a: SetDatumArgs) -> dict:
     return {"sketch": a.sketch, "constraint_id": a.constraint_id, "value": a.value}
 
 
-class ExtrudeArgs(BaseModel):
+class ExtrudeArgs(ToolArgs):
     sketch: str = Field(..., description="Sketch (closed profile) to extrude")
     length: float = Field(..., gt=0, description="Extrusion length mm")
     solid: bool = True
@@ -363,7 +378,7 @@ def extrude(a: ExtrudeArgs) -> dict:
 # --------------------------------------------------------------------------- #
 # Multi-surface features (revolve / loft / sweep / helix / arrays)
 # --------------------------------------------------------------------------- #
-class RevolveArgs(BaseModel):
+class RevolveArgs(ToolArgs):
     sketch: str = Field(..., description="Closed-profile sketch to revolve")
     angle: float = Field(360.0, gt=0, le=360, description="Sweep angle in degrees")
     axis_x: float = Field(0.0, description="Rotation axis direction (default 0,0,1 = +Z)")
@@ -384,7 +399,7 @@ def revolve(a: RevolveArgs) -> dict:
                                      (a.base_x, a.base_y, a.base_z), name=a.name))
 
 
-class LoftArgs(BaseModel):
+class LoftArgs(ToolArgs):
     sections: list[str] = Field(..., min_length=2,
                                 description="Names of 2+ closed sketches to blend through, in order")
     ruled: bool = Field(False, description="True = straight (ruled) transitions between sections")
@@ -398,7 +413,7 @@ def loft(a: LoftArgs) -> dict:
     return _summary(surfaces.loft(_doc(), [_obj(n) for n in a.sections], True, a.ruled, a.name))
 
 
-class SweepArgs(BaseModel):
+class SweepArgs(ToolArgs):
     profile: str = Field(..., description="Closed-profile sketch to sweep")
     spine: str = Field(..., description="Path object: a sketch or a helix")
     frenet: bool = Field(True, description="Rotate the profile with the path (needed on helical spines)")
@@ -413,7 +428,7 @@ def sweep(a: SweepArgs) -> dict:
                                    frenet=a.frenet, name=a.name))
 
 
-class HelixArgs(BaseModel):
+class HelixArgs(ToolArgs):
     radius: float = Field(..., gt=0, description="Helix radius mm")
     pitch: float = Field(..., gt=0, description="Height gained per turn, mm")
     height: float = Field(..., gt=0, description="Total height, mm")
@@ -433,7 +448,7 @@ def add_helix(a: HelixArgs) -> dict:
     return {"name": hx.Name, "label": hx.Label, "type": hx.TypeId}
 
 
-class PolarArrayArgs(BaseModel):
+class PolarArrayArgs(ToolArgs):
     base: str = Field(..., description="Object to repeat")
     count: int = Field(..., ge=2, le=100, description="Total number of copies")
     total_angle: float = Field(360.0, gt=0, le=360, description="Arc to spread over, degrees")
@@ -453,7 +468,7 @@ def polar_array(a: PolarArrayArgs) -> dict:
 # --------------------------------------------------------------------------- #
 # Parametric part generators (complex multi-surface parts in one call)
 # --------------------------------------------------------------------------- #
-class GearArgs(BaseModel):
+class GearArgs(ToolArgs):
     module_mm: float = Field(..., gt=0,
                              description="Gear module in mm (tooth size; pitch diameter = module * teeth)")
     teeth: int = Field(..., ge=6, le=200, description="Number of teeth")
@@ -485,7 +500,7 @@ def add_involute_gear(a: GearArgs) -> dict:
                                         a.name, (a.x, a.y, a.z)))
 
 
-class FanRotorArgs(BaseModel):
+class FanRotorArgs(ToolArgs):
     hub_radius: float = Field(..., gt=0, description="Hub cylinder radius mm")
     hub_height: float = Field(..., gt=0, description="Hub cylinder height mm")
     blade_count: int = Field(..., ge=2, le=24, description="Number of blades")
@@ -519,7 +534,7 @@ def add_fan_rotor(a: FanRotorArgs) -> dict:
                                     name=a.name, position=(a.x, a.y, a.z)))
 
 
-class SpringArgs(BaseModel):
+class SpringArgs(ToolArgs):
     coil_radius: float = Field(..., gt=0, description="Coil (helix) radius mm")
     wire_radius: float = Field(..., gt=0, description="Wire radius mm")
     pitch: float = Field(..., gt=0, description="Height per turn mm (must exceed wire diameter)")
@@ -550,7 +565,7 @@ def add_spring(a: SpringArgs) -> dict:
 # --------------------------------------------------------------------------- #
 # File ingest (Phase 4)
 # --------------------------------------------------------------------------- #
-class ImportArgs(BaseModel):
+class ImportArgs(ToolArgs):
     filename: str = Field(..., description="Path to the file to import")
     name: str = Field("Imported", description="Name hint for the imported object")
 
@@ -568,7 +583,7 @@ def import_stl(a: ImportArgs) -> dict:
     return _summary(ingest.import_stl(_doc(), a.filename, a.name))
 
 
-class OpenDocumentArgs(BaseModel):
+class OpenDocumentArgs(ToolArgs):
     filename: str = Field(..., description="Path to a .FCStd FreeCAD document")
 
 
@@ -582,7 +597,7 @@ def open_document(a: OpenDocumentArgs) -> dict:
 # --------------------------------------------------------------------------- #
 # Simulation (Phase 5: CalculiX FEA — static structural + steady-state thermal)
 # --------------------------------------------------------------------------- #
-class ListFacesArgs(BaseModel):
+class ListFacesArgs(ToolArgs):
     name: str = Field("", description="Object to inspect (empty = the final solid)")
 
 
@@ -597,7 +612,7 @@ def list_faces(a: ListFacesArgs) -> dict:
 _DIRECTIONS = {"normal", "x", "-x", "y", "-y", "z", "-z"}
 
 
-class SimulateStaticArgs(BaseModel):
+class SimulateStaticArgs(ToolArgs):
     fixed_faces: list[str] = Field(..., min_length=1,
                                    description='Faces held rigid, e.g. ["Face1"] (see list_faces)')
     load_faces: list[str] = Field(..., min_length=1, description="Faces the force acts on")
@@ -625,7 +640,7 @@ def simulate_static(a: SimulateStaticArgs) -> dict:
     return summary
 
 
-class SimulateThermalArgs(BaseModel):
+class SimulateThermalArgs(ToolArgs):
     hot_faces: list[str] = Field(..., min_length=1, description="Faces held at the hot temperature")
     hot_temp_c: float = Field(..., description="Hot temperature, deg C")
     cold_faces: list[str] = Field(..., min_length=1, description="Faces held at the cold temperature")
@@ -654,7 +669,7 @@ def simulate_thermal(a: SimulateThermalArgs) -> dict:
 # --------------------------------------------------------------------------- #
 # Export
 # --------------------------------------------------------------------------- #
-class ExportArgs(BaseModel):
+class ExportArgs(ToolArgs):
     name: str = Field(..., description="Object to export")
     filename: str = Field(..., description="Output path/filename")
 
@@ -674,7 +689,7 @@ def export_stl(a: ExportArgs) -> dict:
 # --------------------------------------------------------------------------- #
 # Inspection (read-only grounding)
 # --------------------------------------------------------------------------- #
-class NoArgs(BaseModel):
+class NoArgs(ToolArgs):
     pass
 
 
@@ -685,7 +700,7 @@ def get_feature_tree(a: NoArgs) -> dict:
     return {"objects": inspect.feature_tree(_doc())}
 
 
-class DescribeArgs(BaseModel):
+class DescribeArgs(ToolArgs):
     name: str = Field(..., description="Object name to describe")
 
 
@@ -699,3 +714,41 @@ def describe_object(a: DescribeArgs) -> dict:
                "Volume, surface area, centre of mass and solid count of an object.", DescribeArgs)
 def mass_properties(a: DescribeArgs) -> dict:
     return inspect.mass_properties(_obj(a.name))
+
+
+# --------------------------------------------------------------------------- #
+# Toolroom (Phase 6: sandboxed self-extension)
+# --------------------------------------------------------------------------- #
+class ForgeArgs(ToolArgs):
+    request: str = Field(..., min_length=10,
+                         description="Plain-language spec of the NEW parametric tool to create, "
+                                     "with its parameters and units, e.g. 'a hollow tube given "
+                                     "outer diameter, wall thickness and length in mm'")
+
+
+@registry.tool("forge_tool",
+               "LAST RESORT — only when NO existing tool or combination of tools can build the "
+               "requested shape: the coder model writes a brand-new parametric tool, it is "
+               "safety-gated and sandbox-tested, then permanently added to the toolbox.",
+               ForgeArgs)
+def forge_tool(a: ForgeArgs) -> dict:
+    from agentic_cad.toolroom import forge  # lazy: needs the code model only here
+
+    result = forge.forge_tool(a.request, registry)
+    out = {"ok": result.ok, "attempts": result.attempts, "seconds": result.seconds}
+    if result.ok:
+        out.update({"new_tool": result.name, "description": result.description,
+                    "self_test_volume_mm3": result.test_volume})
+    else:
+        out["error"] = result.error
+    return out
+
+
+# Re-register previously forged tools so self-extension persists across
+# sessions. Never fatal: a corrupt stored tool is skipped, not raised.
+try:
+    from agentic_cad.toolroom import store as _toolroom_store
+
+    _toolroom_store.load_all(registry)
+except Exception:
+    pass

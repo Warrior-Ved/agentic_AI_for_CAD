@@ -83,11 +83,26 @@ def step_view_path():
     return config.EXPORT_DIR / _VIEW_STEP
 
 
-def preview_to_summary(plan: Plan) -> dict:
+def preview_to_summary(plan: Plan, base_doc=None) -> dict:
     """Run a plan in a throwaway document, export its STL for the viewer, and
-    return a full preview report — WITHOUT touching the live model."""
+    return a full preview report — WITHOUT touching the live model.
+
+    With ``base_doc`` the preview starts from a COPY of that document's
+    objects, so EDIT plans (which reference existing object names) preview
+    faithfully against the current model.
+    """
     doc = document.new_document("__preview__")
     try:
+        if base_doc is not None:
+            # Copy only dependency ROOTS (nothing depends on them); each copy
+            # brings its whole feature tree once, preserving object names.
+            for obj in base_doc.Objects:
+                try:
+                    if not obj.InList:
+                        doc.copyObject(obj, True)
+                except Exception:
+                    continue
+            doc.recompute()
         result = run_steps(plan, registry, doc, repair_fn=None, max_repair=0, skip=_DOC_MGMT_TOOLS)
         report = {
             "success": result.success,
@@ -113,6 +128,7 @@ class Session:
     lock: threading.RLock = field(default_factory=threading.RLock)
     doc: object | None = None
     instruction: str = ""
+    intent: str = "build"          # routed intent for the current instruction
     clarification: Clarification | None = None
     answers: dict = field(default_factory=dict)   # question id -> user's answer
     plan: Plan | None = None
@@ -134,6 +150,7 @@ class Session:
                 pass
         self.doc = None
         self.instruction = ""
+        self.intent = "build"
         self.clarification = None
         self.answers = {}
         self.plan = None
