@@ -104,7 +104,36 @@ cd backend
 .venv/Scripts/python.exe scripts/demo_plan_confirm.py
 .venv/Scripts/python.exe scripts/demo_plan_confirm.py --interactive "a 50mm cube with a 12mm hole"
 .venv/Scripts/python.exe scripts/demo_plan_confirm.py --no-clarify "a 50mm cube with a 12mm hole"
+
+# Complex multi-surface parts (one generator call each — verified end-to-end)
+.venv/Scripts/python.exe scripts/demo_plan_confirm.py --no-clarify "Make a helical gear with module 2 mm, 24 teeth, 10 mm thick, helix angle 20 degrees, with an 8 mm bore."
+.venv/Scripts/python.exe scripts/demo_plan_confirm.py --no-clarify "Design a 6-blade cooling fan: hub radius 12 mm, hub height 25 mm, blades 45 mm long and 14 mm wide with a helical twist."
+.venv/Scripts/python.exe scripts/demo_plan_confirm.py --no-clarify "Make a compression spring: 8 mm coil radius, 1 mm wire radius, 4 mm pitch, 8 turns."
+
+# Phase 6 — the agent FORGES a brand-new tool (sandboxed self-extension)
+.venv/Scripts/python.exe scripts/demo_toolroom.py
+.venv/Scripts/python.exe scripts/demo_toolroom.py "a parametric hex standoff: across-flats, height, thread hole diameter"
 ```
+
+### Toolroom + reflective memory (Phase 6)
+
+When no existing tool can build a shape, the agent can **forge one**: the local
+coder model writes a new tool module against a strict contract; it must pass a
+**static AST safety gate** (whitelisted imports only — no file/network/process
+access) and then a **sandboxed self-test in an isolated subprocess** (a fresh
+FreeCAD instance runs the tool's own analytic geometry assertions, so a kernel
+crash can never touch the live app). Accepted tools are persisted to
+`backend/var/toolroom/` and re-gated + re-registered at every startup — the
+toolbox grows permanently. The agent reaches this via the `forge_tool` tool;
+`GET /api/toolroom` lists what has been forged.
+
+Every plan→execute episode is also logged to a local SQLite **episodic
+memory**; the model reflects on episodes (failures first) into short
+**lessons**, stored with local embeddings (Ollama all-minilm). At planning
+time the most relevant lessons are retrieved (cosine, with keyword fallback
+when offline) and injected into the planner context, and the store is
+periodically **consolidated** — near-duplicate lessons pruned, total capped.
+`GET /api/memory` shows the episodes, stats and current lessons.
 
 ## Run the web app (browser frontend)
 
@@ -125,6 +154,30 @@ STL downloadable). The 3-D library is vendored under `frontend/vendor/`, so the
 whole app runs offline. Requires Ollama running locally; the header shows live
 FreeCAD / Ollama / model status.
 
+### Simulate in the browser (Phase 5)
+
+Once a part is built, click **⚡ Simulate** under the viewer:
+
+1. choose the analysis type (**static structural** or **steady-state thermal**)
+   and a material (steel / aluminium / titanium / ABS);
+2. **click faces directly in the 3-D viewer** to assign them — fixed supports
+   (blue) and loaded faces (red) for structural, hot (orange) and cold (light
+   blue) faces for thermal — then set the force magnitude + direction or the
+   two temperatures;
+3. **Run simulation** meshes the part (Gmsh, 2nd-order tets) and solves it with
+   CalculiX in the background — both binaries ship inside FreeCAD, so it is
+   still fully local;
+4. results render **in the same viewer** as a colour-mapped field (von Mises
+   stress, displacement, or temperature) with a legend, a deformation-scale
+   slider, and a summary line (max stress, max deflection, **safety factor**
+   against the material's yield strength).
+
+The same analyses are exposed to the agent as tools (`list_faces`,
+`simulate_static`, `simulate_thermal`), so you can also just ask in chat, e.g.
+*"fix the left face, push 500 N down on the right face, and tell me the safety
+factor"*. Solves are verified against analytic beam-theory and heat-conduction
+solutions in `tests/cad/test_simulation.py`.
+
 `demo_holed_block.py` builds the Deliverable-1 holed block parametrically and
 writes `.FCStd` + `.step` + `.stl` into `backend/var/`. `demo_agent.py` runs the
 ReAct loop against a local model, printing each tool call, error recovery, and the
@@ -137,7 +190,7 @@ cd backend
 .venv/Scripts/python.exe -m agentic_cad.mcp_servers.cad_server   # stdio transport
 ```
 
-Any MCP client can spawn this and call the 23 CAD tools (see
+Any MCP client can spawn this and call the 41 CAD tools (see
 `tests/agent/test_mcp_server.py` for a client round-trip example).
 
 ---
@@ -153,11 +206,23 @@ backend/
       document.py        #   document lifecycle (new/open/save/recompute)
       geometry.py        #   atomic Part ops: primitives, booleans, fillet, export
       features.py        #   parametric spine: sketch -> extrude -> datum edit
+      surfaces.py        #   multi-surface ops: revolve, loft, sweep, helix, polar array
+      parts.py           #   parametric generators: involute gear, fan rotor, spring
+      ingest.py          #   file ingest: STEP/IGES exact, STL -> solid
+      simulation.py      #   FEA: static + thermal via Gmsh + CalculiX (headless)
       inspect.py         #   read model state (feature tree, bbox, mass props)
       recipes.py         #   composite parts (holed block = Deliverable 1)
     tools/               # agent-facing tool layer
       registry.py        #   Tool/ToolRegistry: pydantic args -> JSON schema
-      cad_tools.py       #   the 23 CAD tools (single source of truth)
+      cad_tools.py       #   the 42 built-in tools (single source of truth)
+    toolroom/            # sandboxed self-extension (Phase 6)
+      templates.py       #   the forged-tool contract + codegen prompt
+      sandbox.py         #   AST safety gate + isolated subprocess self-test
+      store.py           #   persist/load forged tools (var/toolroom)
+      forge.py           #   request -> generate -> gate -> sandbox -> register
+    memory/              # reflective memory (Phase 6)
+      episodic.py        #   SQLite log of every plan->execute episode
+      reflect.py         #   lessons: reflect, embed, retrieve, consolidate
     mcp_servers/
       cad_server.py      #   MCP server publishing the registry over stdio
     agent/
@@ -165,8 +230,10 @@ backend/
       plan.py            #   Plan/PlanStep schema + validate-against-registry
       planner.py         #   constrained-JSON plan + LLM repair generation
       clarify.py         #   ask geometry-critical questions before planning
+      router.py          #   intent routing (build/edit/analyze/question) + read-only answer loop
       validation.py      #   per-step kernel validation (State + shape checks)
       execute.py         #   Clarify -> Plan -> Confirm -> Execute engine (preview/transaction/repair)
+    privacy.py           # local-only egress guard: non-loopback connections raise
     server/
       app.py             #   FastAPI: clarify/plan/execute/model endpoints (in-process FreeCAD)
       session.py         #   live-document session state + preview/geometry helpers
@@ -187,16 +254,38 @@ docs/                    # proposal, supervisor deck, literature review
 | 1–4    | **Foundation** — FreeCAD scripting, atomic + parametric ops, tests | ✅ done |
 | 5–10   | **MCP CAD core** — 23 tools, MCP server, ReAct agent loop on live geometry | ✅ done |
 | 11–16  | **Plan → Confirm → Execute** — constrained-JSON plan, preview, per-step validation, bounded repair, single-undo | ✅ done |
-| 17–21  | File ingest (STEP/STL exact; PDF assistive) + edit-by-description | next |
-| 22–25  | Simulation tools (FEA + thermal) via CalculiX | |
-| 26–30  | Toolroom (sandboxed self-extension) + reflective memory | |
-| 31–34  | Intent router + privacy / offline verification | |
-| 35–40  | Evaluation, ablation, demo, write-up | |
+| +      | **Complex geometry** — revolve/loft/sweep/helix/polar-array tools + parametric generators (involute spur & helical gears, twisted-blade fan rotors, coil springs) | ✅ done |
+| 17–21  | File ingest (STEP/STL exact ✅; PDF assistive pending) + edit-by-description | in progress |
+| 22–25  | **Simulation** — static structural + steady-state thermal FEA (Gmsh + CalculiX, both bundled with FreeCAD), agent tools + interactive browser UI with face picking and colour-mapped results | ✅ done |
+| 26–30  | **Toolroom + reflective memory** — sandboxed self-extension (AST gate + subprocess self-test) with persistent forged tools; episodic SQLite log, model-written lessons, embedding retrieval into the planner, consolidation/pruning | ✅ done |
+| 31–34  | **Intent router + privacy verification** — llama3.2:3b routes build/edit/analyze/question; edit-by-description plans against the live model; read-only answer loop; socket-level egress guard proves local-only at runtime | ✅ done |
+| 35–40  | Evaluation, ablation, demo, write-up | next |
 
 ---
 
+### Intent routing + chat that understands the model (Phase 7)
+
+Every message to the web app is first **routed** by the small local model
+(`llama3.2:3b`, ~0.5 s): *build* runs the clarify→plan→confirm→execute
+pipeline as before; *edit* plans **against the current model** (the feature
+tree is injected as context, and the preview runs on a copy of the live
+document — "make the plate 15 mm thick" becomes a one-step `set_property`
+edit, not a rebuild); *analyze* and *question* run a **read-only agent loop**
+(inspection + simulation tools only) that answers in chat with numbers
+grounded in the real geometry. Routing degrades gracefully to *build* if the
+router is unavailable.
+
+```bash
+# prove the privacy claim at runtime
+.venv/Scripts/python.exe scripts/verify_privacy.py
+```
+
 ## Privacy
 
-Local by default. Cloud escalation is **off** (`AGENTIC_CAD_ALLOW_CLOUD=0`) and,
-when enabled, must show exactly what would be sent. The evaluation is designed to
-run with networking disabled to *prove* — not promise — the privacy claim.
+Local by default — and **enforced, not promised**: unless
+`AGENTIC_CAD_ALLOW_CLOUD=1`, the server installs a socket-level egress guard
+(`agentic_cad/privacy.py`) so any outbound connection to a non-loopback
+address raises `PrivacyViolation` and is logged (visible in `/api/health`).
+`scripts/verify_privacy.py` demonstrates it end-to-end: internet destinations
+blocked, the local Ollama loopback still allowed, and the full geometry
+pipeline running with zero network access.
