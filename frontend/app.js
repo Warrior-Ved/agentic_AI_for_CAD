@@ -20,6 +20,7 @@
       if (k === "class") n.className = attrs[k];
       else if (k === "html") n.innerHTML = attrs[k];
       else if (k.startsWith("on") && typeof attrs[k] === "function") n.addEventListener(k.slice(2), attrs[k]);
+      else if (typeof attrs[k] === "boolean") n[k] = attrs[k];  // disabled etc: property, not attribute
       else n.setAttribute(k, attrs[k]);
     }
     (children || []).forEach((c) => n.appendChild(typeof c === "string" ? document.createTextNode(c) : c));
@@ -85,12 +86,36 @@
   }
 
   // ------------------------------------------------------------------ flow
+  let currentIntent = "build";
+
   async function onSubmit(instruction) {
     if (busy || !instruction.trim()) return;
     addUser(instruction);
     input.value = "";
-    setBusy(true, "Thinking about what to ask…");
+    setBusy(true, "Routing the request…");
     try {
+      const route = await api("/api/route", { instruction });
+      currentIntent = route.intent || "build";
+
+      if (currentIntent === "analyze" || currentIntent === "question") {
+        setBusy(true, currentIntent === "analyze" ? "Inspecting the model…" : "Thinking…");
+        const res = await api("/api/answer", { instruction });
+        renderAnswer(res, currentIntent);
+        setBusy(false);
+        return;
+      }
+
+      if (currentIntent === "edit") {
+        setBusy(true, "Planning the edit against the current model…");
+        const data = await api("/api/plan", { instruction, intent: "edit" });
+        renderPlan(data);
+        await maybeShowModel(data.view_token, data.preview);
+        setBusy(false);
+        return;
+      }
+
+      // build: clarify first, as before
+      setBusy(true, "Thinking about what to ask…");
       const clar = await api("/api/clarify", { instruction });
       if (clar.needs_clarification && clar.questions.length) {
         renderClarify(clar);
@@ -102,6 +127,16 @@
     } catch (e) {
       renderError(e.message);
       setBusy(false);
+    }
+  }
+
+  function renderAnswer(res, intent) {
+    const body = addCard(intent === "analyze" ? "Analysis" : "Answer", intent);
+    body.appendChild(el("div", { class: "qtext" }, [res.answer || "(no answer)"]));
+    if (res.tools_used && res.tools_used.length) {
+      const used = res.tools_used.map((t) => t.tool).join(", ");
+      body.appendChild(el("div", { class: "qwhy", style: "margin-top:6px" },
+        ["grounded via: " + used]));
     }
   }
 
@@ -161,8 +196,12 @@
 
   function renderPlan(data) {
     const p = data.plan, pv = data.preview;
-    const body = addCard("Proposed plan", "preview");
+    const body = addCard("Proposed plan", data.intent === "edit" ? "edit · preview" : "preview");
     body.appendChild(el("div", { class: "qtext", style: "margin-bottom:8px" }, [p.summary]));
+    if (data.plan_attempts > 1) {
+      body.appendChild(el("div", { class: "qwhy", style: "margin-bottom:8px" },
+        [`self-repaired: ${data.plan_attempts - 1} earlier draft(s) failed the dry-run preview and were revised automatically`]));
+    }
 
     const ol = el("ol", { class: "steps" });
     const stepStatus = {};
@@ -198,13 +237,22 @@
 
     // actions
     const actions = el("div", { class: "actions" });
-    const approve = el("button", { class: "approve", disabled: !pv.success,
+    const approve = el("button", { class: "approve",
       onclick: () => doExecute(actions) }, ["✓ Approve & build"]);
+    // Set as a PROPERTY, never setAttribute: `disabled` is a boolean attribute,
+    // so setAttribute("disabled", false) would still disable a valid plan's button.
+    approve.disabled = !pv.success;
     const rejectBtn = el("button", { class: "danger",
       onclick: () => toggleReject(body, actions) }, ["✗ Reject"]);
     actions.appendChild(approve);
     actions.appendChild(rejectBtn);
     body.appendChild(actions);
+
+    // Re-scroll AFTER the buttons exist: addCard()'s scroll fired while the card
+    // was still empty, which left the Approve/Reject row below the log's fold —
+    // clipped by overflow and covered by the composer, so it could not be clicked.
+    scrollDown();
+    requestAnimationFrame(scrollDown);
   }
 
   function geomChips(geom) {

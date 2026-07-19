@@ -20,6 +20,9 @@ line of it exactly (hole position, through vs blind, depth, axis). Do not \
 override it with your own assumptions.
 - Give each step a one-line rationale.
 - Output ONLY the JSON object, matching the required schema.
+- When REVISING after a rejection or a failed preview, change ONLY what the \
+feedback asks for — keep every other dimension and detail from the original \
+request exactly as it was.
 
 Referring to objects across steps (this is the most common cause of failure):
 - A later step can only reference an object that an EARLIER step created.
@@ -31,22 +34,32 @@ extrude, a solid you will cut or fuse), and reuse that identical string.
 - Prefer the fewest steps: if one generator tool (gear, fan, spring) or one \
 primitive builds the part, do NOT decompose it into sketches and booleans.
 
-Geometry rules for boxes and holes (a box spans x:0..L, y:0..W, z:0..H):
-- A box is created with its near-bottom corner at its (x, y, z), so it occupies \
-[x, x+length] x [y, y+width] x [z, z+height].
-- To CENTRE a hole on the top face of a box of length L and width W, place the \
-cutting cylinder at x=L/2, y=W/2 (NOT at a corner).
-- A cylinder is created with its base circle centred on its (x, y, z) and its \
-axis along +Z, extending upward by its height.
-- For a THROUGH hole along Z, make the cutting cylinder longer than the block and \
-start it below the block: set the cylinder z = -1 and its height = H + 2, so it \
-passes cleanly all the way through. Its radius is (hole diameter)/2.
-- For a BLIND hole of depth D from the top face, set the cylinder height = D + 1 \
-and z = H - D (so it starts at the surface and stops D deep).
-- To cut a hole: add the box, add the cutting cylinder, then boolean_cut with the \
-box as base and the cylinder as tool.
-- A hole along the X or Y axis: tilt the cutting cylinder with axis_x/axis_y/axis_z \
-(e.g. axis_x=1, axis_z=0 goes along +X).
+Placement rules (millimetres):
+- add_box and add_cylinder accept centered=true, which makes (x, y, z) the \
+solid's CENTRE. Without it a box is placed by its min corner and a cylinder by \
+its base-circle centre (axis +Z).
+- CONVENTION: create the base part with centered=true at the origin (0,0,0). A \
+feature "through the centre" then needs a cutter that is ALSO centered=true at \
+(0,0,0) — identical centres, no offset arithmetic to get wrong. Worked example, \
+"20 mm cube with a 15 mm square hole through the centre":
+    1. add_box(length=20, width=20, height=20, name="Base", centered=true)
+    2. add_box(length=15, width=15, height=22, name="Cutter", centered=true)
+    3. boolean_cut(base="Base", tool="Cutter", name="Part")
+  (no translate step is needed — both solids share the origin as their centre)
+- Holes, pockets, slots and cut-outs are SUBTRACTION: build a cutter solid in \
+the exact SHAPE of the cavity — ROUND hole -> add_cylinder (radius = \
+diameter/2); SQUARE or RECTANGULAR hole/slot -> add_box with the hole's side \
+lengths; NEVER substitute one shape for the other — then \
+boolean_cut(base=main solid, tool=cutter).
+- A THROUGH cutter must be 2 mm LONGER than the material it crosses, so it \
+protrudes past both faces (e.g. through a 20 mm cube: cutter length 22).
+- A BLIND hole of depth D from a face: the cutter starts at that face and \
+reaches D deep (top face at z=T: cylinder centered=false, z = T - D, height = D + 1).
+- A hole along the X or Y axis: tilt a cylinder cutter with axis_x/axis_y/axis_z \
+(e.g. axis_x=1, axis_z=0 goes along +X), or size a box cutter along that axis.
+- Prefer primitives + boolean_cut; use new_sketch -> sketch shapes -> extrude \
+ONLY for profiles no primitive can make (an extrusion is solid MATERIAL — \
+boolean_cut it afterwards to remove material).
 
 Complex multi-surface parts — prefer ONE generator call over many primitive steps:
 - Gear: add_involute_gear(module_mm, teeth, thickness, ...). Pitch diameter = \
@@ -125,31 +138,77 @@ def make_ollama_repair_fn(model: str = config.MODEL_PLANNER, host: str = config.
 
 
 def make_plan(instruction: str, registry: ToolRegistry, *, chat_fn: PlanChatFn | None = None,
-              model: str = config.MODEL_PLANNER, context: str | None = None, max_retries: int = 2) -> Plan:
+              model: str = config.MODEL_PLANNER, context: str | None = None, max_retries: int = 2,
+              verify_fn=None, trace: list | None = None,
+              revise_of: Plan | None = None, feedback: str | None = None) -> Plan:
     """Produce a registry-valid Plan, retrying with feedback on failure.
 
-    Raises ``ValueError`` if a valid plan cannot be produced after the retry.
+    ``verify_fn(plan) -> list[str]`` can add deeper checks (dry-run previews,
+    semantic cross-checks); its problems are fed back INSIDE this conversation,
+    so the model sees its own previous plan next to the complaint — far more
+    effective than restarting with a longer instruction.
+
+    ``revise_of`` + ``feedback`` put the planner in REVISION mode: the plan being
+    revised is seeded into the conversation as the model's own previous answer and
+    the feedback as the only requested change. The model edits THAT plan — keeping
+    every earlier change baked into it — instead of re-deriving from the original
+    request and silently dropping accumulated edits.
+
+    ``trace`` (a list) collects human-readable events about every draft — what
+    was rejected and why — so a UI can show the agent's thought process.
+
+    Raises ``ValueError`` if a valid plan cannot be produced after the retries.
     """
     chat_fn = chat_fn or make_ollama_plan_fn(model)
     schema = Plan.model_json_schema()
+
+    def note(stage: str, text: str) -> None:
+        if trace is not None:
+            trace.append({"stage": stage, "text": text})
 
     system = PLANNER_SYSTEM.format(catalog=tool_catalog(registry))
     user = instruction if not context else f"{instruction}\n\nCurrent model:\n{context}"
     messages = [{"role": "system", "content": system},
                 {"role": "user", "content": user}]
 
+    # Revision mode: hand the model its own previous plan and ask for ONLY the
+    # requested change. The prior plan already carries every earlier edit, so
+    # this is how incremental edits accumulate instead of reverting to defaults.
+    if revise_of is not None and feedback:
+        messages.append({"role": "assistant", "content": json.dumps(revise_of.model_dump())})
+        messages.append({"role": "user", "content": (
+            f"Apply ONLY this change to the plan above: {feedback}\n"
+            "This change takes priority over any earlier specification if they "
+            "conflict. Keep every other step, dimension, object name and detail "
+            "EXACTLY as in the plan above — do not revert anything to a default. "
+            "Return the full corrected JSON plan.")})
+        note("planner", f"revising the previous {len(revise_of.steps)}-step plan — "
+                        f"applying only: {feedback}")
+
     last_error = ""
-    for _ in range(max_retries + 1):
+    for attempt in range(1, max_retries + 2):
         raw = chat_fn(messages, schema)
         try:
             plan = Plan.model_validate_json(raw)
         except Exception as exc:
             last_error = f"plan was not valid JSON for the schema: {exc}"
+            note("planner", f"draft {attempt} rejected: not valid JSON for the plan schema")
             messages.append({"role": "user", "content": last_error + " Try again."})
             continue
 
+        note("planner", f"draft {attempt}: {len(plan.steps)} step(s) — "
+                        + ", ".join(s.tool for s in plan.steps))
         problems = plan.validate_against_registry(registry)
+        if problems:
+            note("planner", f"draft {attempt} rejected by schema validation: "
+                            + "; ".join(problems))
+        elif verify_fn is not None:
+            problems = list(verify_fn(plan) or [])
+            if problems:
+                note("planner", f"draft {attempt} rejected by verification: "
+                                + "; ".join(problems))
         if not problems:
+            note("planner", f"draft {attempt} accepted")
             return plan
 
         last_error = "the plan had these problems:\n" + "\n".join(problems)
@@ -159,7 +218,8 @@ def make_plan(instruction: str, registry: ToolRegistry, *, chat_fn: PlanChatFn |
         })
         messages.append({
             "role": "user",
-            "content": last_error + "\nFix them and return the corrected JSON plan.",
+            "content": last_error + "\nFix EXACTLY these problems and return the corrected "
+                       "JSON plan, keeping everything else (especially dimensions) unchanged.",
         })
 
     raise ValueError(f"could not produce a valid plan: {last_error}")

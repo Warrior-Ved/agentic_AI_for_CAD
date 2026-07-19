@@ -5,7 +5,7 @@ from agentic_cad.agent.clarify import (
     Clarification, ClarifyChatFn, answers_to_context, make_clarification)
 from agentic_cad.agent.plan import Plan, PlanStep
 from agentic_cad.agent.planner import make_plan
-from agentic_cad.agent.validation import validate_document
+from agentic_cad.agent.validation import semantic_issue, validate_document
 from agentic_cad.cad import bootstrap, document, inspect
 from agentic_cad.tools.registry import ToolRegistry
 bootstrap.ensure_freecad_importable()
@@ -130,6 +130,7 @@ def summarize(doc) -> dict:
     if final is not None:
         summary["final_object"] = final.Name
         summary["mass_properties"] = inspect.mass_properties(final)
+        summary["bbox"] = inspect.bbox(final)
     return summary
 
 
@@ -166,17 +167,25 @@ def plan_confirm_execute(instruction: str, registry: ToolRegistry, doc, *, confi
                          planner_chat_fn=None, repair_fn: RepairFn | None = None, model: str | None = None,
                          context: str | None = None, max_rounds: int = 3, max_repair: int = 2,
                          clarify_fn: ClarifyFn | None = None,
-                         clarify_chat_fn: ClarifyChatFn | None = None) -> ExecutionResult:
+                         clarify_chat_fn: ClarifyChatFn | None = None,
+                         use_memory: bool = True) -> ExecutionResult:
     """Full human-in-the-loop build.
 
     If ``clarify_fn`` and ``clarify_chat_fn`` are given, the loop first asks the
     model which geometry-critical details are ambiguous; ``clarify_fn`` collects
     the user's answers, which are folded into the planner's context as a resolved
     spec. Then it plans, previews, confirms and executes as before.
+
+    With ``use_memory`` the planner context also gets the most relevant lessons
+    from past episodes, and the outcome is logged to the episodic store. Memory
+    is strictly best-effort: it can never break the pipeline.
     """
     spec = _resolve_spec(instruction, clarify_fn, clarify_chat_fn, model)
-    base_context = "\n\n".join(c for c in (spec, context) if c) or None
+    lessons = _recall_lessons(instruction) if use_memory else None
+    base_context = "\n\n".join(c for c in (spec, lessons, context) if c) or None
 
+    plan: Plan | None = None
+    result = ExecutionResult(False, message="rejected: reached max planning rounds")
     feedback: str | None = None
     for _ in range(max_rounds):
         instr = instruction
@@ -186,20 +195,71 @@ def plan_confirm_execute(instruction: str, registry: ToolRegistry, doc, *, confi
         plan_kwargs = {"chat_fn": planner_chat_fn, "context": base_context}
         if model:
             plan_kwargs["model"] = model
-        plan = make_plan(instr, registry, **plan_kwargs)
 
-        preview = preview_plan(plan, registry)
+        # Adaptive planning: dry-run preview + semantic cross-check run INSIDE
+        # the planner conversation (verify_fn), so the model revises its own
+        # plan against kernel feedback before the user ever sees a broken one.
+        holder: dict = {}
+
+        def verify(candidate) -> list[str]:
+            report = preview_plan(candidate, registry)
+            holder["plan"], holder["preview"] = candidate, report
+            if not report.success:
+                failed = next((s for s in report.steps if not s.ok), None)
+                return [f"step {failed.step} ({failed.tool}) FAILED its dry-run preview: "
+                        f"{failed.error}" if failed else report.message or "no valid geometry"]
+            issue = semantic_issue(instruction, report.summary)
+            return [issue] if issue else []
+
+        try:
+            plan = make_plan(instr, registry, max_retries=3, verify_fn=verify, **plan_kwargs)
+            preview = holder["preview"]
+        except ValueError:
+            if "plan" not in holder:
+                raise
+            plan, preview = holder["plan"], holder["preview"]  # show the failure honestly
+
         decision = confirm_fn(plan, preview)
 
         if decision.action in ("approve", "edit"):
             chosen = decision.plan if decision.action == "edit" else plan
-            return execute_plan(chosen, registry, doc, repair_fn=repair_fn, max_repair=max_repair,
-                                label=instruction[:60])
+            result = execute_plan(chosen, registry, doc, repair_fn=repair_fn, max_repair=max_repair,
+                                  label=instruction[:60])
+            plan = chosen
+            break
         if decision.action == "reject":
             feedback = decision.feedback
             continue
 
-    return ExecutionResult(False, message="rejected: reached max planning rounds")
+    if use_memory:
+        _record_episode(instruction, base_context, plan, result)
+    return result
+
+
+def _recall_lessons(instruction: str) -> str | None:
+    """Best-effort retrieval of past lessons for the planner context."""
+    try:
+        from agentic_cad.memory import reflect
+        return reflect.lessons_context(instruction, k=3,
+                                       embed_fn=reflect.make_ollama_embed_fn())
+    except Exception:
+        return None
+
+
+def _record_episode(instruction: str, context, plan: Plan | None, result: ExecutionResult) -> None:
+    """Best-effort episodic logging of a completed round."""
+    try:
+        from agentic_cad.memory import episodic
+        failed = next((s for s in result.steps if not s.ok), None)
+        episodic.log_episode(
+            instruction, context=context,
+            plan=plan.model_dump() if plan is not None else None,
+            success=result.success,
+            error=(failed.error if failed else None) or (result.message or None),
+            repairs=sum(s.repairs for s in result.steps),
+            volume_mm3=result.final_volume)
+    except Exception:
+        pass
 
 
 def _resolve_spec(instruction, clarify_fn, clarify_chat_fn, model) -> str | None:
